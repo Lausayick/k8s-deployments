@@ -73,7 +73,6 @@ EOF
 
 - set firewall enabled _(for each node)_
 ```
-ufw stop 
 ufw disable
 ```
 
@@ -130,8 +129,8 @@ curl -s https://get.docker.com/ | sh
 ```
 cat > /etc/docker/daemon.json << EOF
 {
-    "exec-opts": ["native.cgroupdriver=systemd"  ],
-    "registry-mirrors": ["http://docker-registry-mirror.kodekloud.com"  ]
+    "exec-opts": ["native.cgroupdriver=systemd"],
+    "registry-mirrors": ["http://docker-registry-mirror.kodekloud.com"]
 }
 EOF
 ```
@@ -232,9 +231,24 @@ kubectl apply -f calico.yaml
 <details>
 <summary><font color="#808080" size="3">&emsp;Ubuntu</font></summary>
 
+- update apt-get _(for each node)_
+```
+apt-get update
+apt-get install -y apt-transport-https ca-certificates curl
+```
+
+- update apt-get _(for each node)_
+```
+curl -fsSL https://dl.k8s.io/apt/doc/apt-key.gpg | sudo gpg --dearmor -o /etc/apt/keyrings/kubernetes-archive-keyring.gpg
+echo "deb https://mirrors.aliyun.com/kubernetes/apt/ kubernetes-xenial main" | sudo tee /etc/apt/sources.list.d/kubernetes.list
+apt-key adv --keyserver keyserver.ubuntu.com --recv-keys B53DC80D13EDEF05
+```
+
 - install kubernetes _(for each node)_
 ```
-apt-get install -y kubelet-1.26.6-00 kubeadm-1.26.6-00 kubectl-1.26.6-00
+apt-get update
+apt-cache madison kubelet
+apt install -y kubelet=1.26.6-00 kubeadm=1.26.6-00 kubectl=1.26.6-00
 ```
 
 - enable kubelet _(for each node)_
@@ -288,38 +302,6 @@ kubectl apply -f calico.yaml
 [//]: # (Kubernetes插件配置)
 <details>
 <summary><font color="red" size="5">Kubernetes config</font></summary>
-
-- network config _(for each node)_
-```
-vim mod.sh
-
-# add content
-#!/bin/bash
-modprobe ip_vs
-modprobe ip_vs_rr
-modprobe ip_vs_wrr
-modprobe ip_vs_sh
-modprobe nf_conntrack_ipv4
-modprobe br_netfilter
-
-chmod +x mod.sh
-bash mod.sh
-
-vim /etc/rc.local
-
-# add content
-/root/mod.sh
-
-chmod +x /etc/rc.local
-
-cat > /etc/sysctl.d/k8s.conf << EOF
-net.bridge.bridge-nf-call-ip6tables = 1
-net.bridge.bridge-nf-call-iptables = 1
-vm.swappiness=0
-EOF
-
-sysctl --system
-```
 
 - install metric tool _(for master)_
 ```
@@ -531,8 +513,10 @@ kubectl apply -f ./components-v0.5.0.yaml
 <summary><font color="red" size="5">Kubernetes GPU config</font></summary>
 
 - references:
-1. https://gitcode.com/NVIDIA/k8s-device-plugin/overview?utm_source=csdn_github_accelerator&isLogin=1
 
+  1. https://gitcode.com/NVIDIA/k8s-device-plugin/overview?utm_source=csdn_github_accelerator&isLogin=1
+  
+  2. https://github.com/4paradigm/k8s-vgpu-scheduler/blob/master/README_cn.md
 
 - Install nvidia-container-toolkit
 ```
@@ -543,81 +527,56 @@ curl -s -L https://nvidia.github.io/libnvidia-container/$distribution/libnvidia-
 sudo apt-get update && sudo apt-get install -y nvidia-container-toolkit
 ```
 
-- Install nvidia-device-plugin
+- config docker daemon 
+```
+vim /etc/docker/daemon.json
 
-```
-kubectl create -f https://raw.githubusercontent.com/NVIDIA/k8s-device-plugin/v0.14.3/nvidia-device-plugin.yml
-```
-- Change k8s-device-plugin for GPU virtualization
-```
-vim k8s-device-plugin.yaml
+# add
+{
+    "default-runtime": "nvidia",
+    "runtimes": {
+        "nvidia": {
+            "path": "/usr/bin/nvidia-container-runtime",
+            "runtimeArgs": []
+        }
+    }
+}
 
-apiVersion: apps/v1
-kind: DaemonSet
-metadata:
-  name: nvidia-device-plugin-daemonset
-  namespace: kube-system
-spec:
-  selector:
-    matchLabels:
-      name: nvidia-device-plugin-ds
-  updateStrategy:
-    type: RollingUpdate
-  template:
-    metadata:
-      annotations:
-        scheduler.alpha.kubernetes.io/critical-pod: ""
-      labels:
-        name: nvidia-device-plugin-ds
-    spec:
-      tolerations:
-      - key: CriticalAddonsOnly
-        operator: Exists
-      - key: nvidia.com/gpu
-        operator: Exists
-        effect: NoSchedule
-      priorityClassName: "system-node-critical"
-      containers:
-      - image: 4pdosc/k8s-device-plugin:latest
-        # - image: m7-ieg-pico-test01:5000/k8s-device-plugin-test:v0.9.0-ubuntu20.04
-        imagePullPolicy: Always
-        name: nvidia-device-plugin-ctr
-        args: ["--fail-on-init-error=false", "--device-split-count=6", "--device-memory-scaling=2", "--device-cores-scaling=1"]
-        # args: ["--fail-on-init-error=false", "--device-split-count=3", "--device-memory-scaling=3", "--device-cores-scaling=1"]
-        env:
-        - name: PCIBUSFILE
-          value: "/usr/local/vgpu/pciinfo.vgpu"
-        - name: NVIDIA_MIG_MONITOR_DEVICES
-          value: all
-        securityContext:
-          allowPrivilegeEscalation: false
-          capabilities:
-            drop: ["ALL"]
-            add: ["SYS_ADMIN"]
-        volumeMounts:
-          - name: device-plugin
-            mountPath: /var/lib/kubelet/device-plugins
-          - name: vgpu-dir
-            mountPath: /usr/local/vgpu
-          - mountPath: /tmp
-            name: hosttmp
-      volumes:
-        - name: device-plugin
-          hostPath:
-            path: /var/lib/kubelet/device-plugins
-        - name: vgpu-dir
-          hostPath:
-            path: /usr/local/vgpu
-        - hostPath:
-            path: /tmp
-          name: hosttmp
-      nodeSelector: 
-        nvidia-vgpu: "on"
+systemctl daemon-reload && systemctl restart docker
 ```
 
-- restart for enable
+- config container
 ```
-systemctl restart docker
-systemctl restart containerd
+vim /etc/containerd/config.toml
+
+# change
+version = 2
+[plugins]
+  [plugins."io.containerd.grpc.v1.cri"]
+    [plugins."io.containerd.grpc.v1.cri".containerd]
+      default_runtime_name = "nvidia"
+
+      [plugins."io.containerd.grpc.v1.cri".containerd.runtimes]
+        [plugins."io.containerd.grpc.v1.cri".containerd.runtimes.nvidia]
+          privileged_without_host_devices = false
+          runtime_engine = ""
+          runtime_root = ""
+          runtime_type = "io.containerd.runc.v2"
+          [plugins."io.containerd.grpc.v1.cri".containerd.runtimes.nvidia.options]
+            BinaryName = "/usr/bin/nvidia-container-runtime"
+
+systemctl daemon-reload && systemctl restart containerd
+```
+
+- Label GPU nodes
+```
+kubectl label nodes {nodeid} gpu=on
+```
+
+- Install vgpu
+
+```
+helm repo add vgpu-charts https://4paradigm.github.io/k8s-vgpu-scheduler
+helm install vgpu vgpu-charts/vgpu --set scheduler.kubeScheduler.imageTag=v1.26.6 -n kube-system
 ```
 </details>
