@@ -1,0 +1,26 @@
+{
+  "os": "CentOS",
+  "master": {
+    "ip": "172.16.2.189",
+    "hostname": "k8s-master",
+    "is_gpu": true
+  },
+  "nodes": [
+    {
+      "ip": "172.16.2.182",
+      "hostname": "k8s-node1",
+      "is_gpu": true
+    },
+    {
+      "ip": "172.16.2.134",
+      "hostname": "k8s-node2",
+      "is_gpu": true
+    }
+  ],
+  "version": {
+    "docker": "1.23.1",
+    "kubernetes": "1.26.6",
+    "pause": "3.9"
+
+  }
+}
